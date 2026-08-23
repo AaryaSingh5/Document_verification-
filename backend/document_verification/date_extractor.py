@@ -35,7 +35,8 @@ EXPIRY_LABEL_PATTERN = re.compile(
 )
 
 DOB_LABEL_PATTERN = re.compile(
-    r"\b(?:DATE\s*(?:OF|0F)\s*BIRTH|BIRTH\s*DATE|DOB|BORN|DATE\s*(?:OF|0F)\s*B1RTH|D\.O\.B|BIRTH)\b",
+    r"\b(?:DATE\s*(?:OF|0F)\s*BIRTH|BIRTH\s*DATE|DOB|D0B|00B|BORN|"
+    r"DATE\s*(?:OF|0F)\s*B1RTH|D\.O\.B|BIRTH)\b",
     re.IGNORECASE,
 )
 

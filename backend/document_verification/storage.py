@@ -162,6 +162,29 @@ def delete_upload(storage_key: str, storage_dir: Optional[str] = None) -> bool:
         logger.warning("Error during best-effort delete of %s: %s", storage_key, exc)
         return False
 
+def load_upload(storage_key: str, storage_dir: Optional[str] = None) -> bytes:
+    """Load uploaded file bytes from disk using the storage key."""
+    if not storage_key:
+        raise FileNotFoundError("Storage key is empty.")
+
+    base_dir = Path(storage_dir or UPLOAD_STORAGE_DIR).resolve()
+    target_path = (base_dir / storage_key).resolve()
+
+    # Path traversal validation
+    try:
+        target_path.relative_to(base_dir)
+    except ValueError as e:
+        raise StorageSecurityError(
+            f"Security violation: Resolved path {target_path} escapes storage root {base_dir}"
+        ) from e
+
+    if not target_path.is_file():
+        raise FileNotFoundError(f"File {storage_key} not found on server.")
+
+    with open(target_path, "rb") as f:
+        return f.read()
+
+
 
 def mask_document_number(value: Optional[str]) -> Optional[str]:
     """Mask all but the last 4 characters of a document number for privacy protection.

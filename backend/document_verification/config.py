@@ -27,6 +27,20 @@ MIN_CONFIDENCE_FOR_REVIEW: float = float(
     os.getenv("MIN_CONFIDENCE_FOR_REVIEW", "0.50")
 )
 
+# Multi-variant OCR fallback: if ENHANCED pass confidence is below this, try other variants
+MULTI_VARIANT_FALLBACK_THRESHOLD: float = float(
+    os.getenv("MULTI_VARIANT_FALLBACK_THRESHOLD", "0.70")
+)
+
+# Glare detection: pixel value threshold (out of 255) to be considered overexposed
+GLARE_PIXEL_THRESHOLD: int = int(os.getenv("GLARE_PIXEL_THRESHOLD", "240"))
+
+# Whether to enable OpenCV contour-based perspective deskew in preprocessing
+OCR_DESKEW_ENABLED: bool = os.getenv("OCR_DESKEW_ENABLED", "True").lower() in ("true", "1", "yes")
+
+# Minimum face similarity score (0.0 to 1.0) to pass liveness face-match
+MIN_FACE_MATCH_CONFIDENCE: float = float(os.getenv("MIN_FACE_MATCH_CONFIDENCE", "0.60"))
+
 # Mandatory fields required for any document verification to succeed
 REQUIRED_FIELDS: Tuple[str, ...] = ("full_name", "document_number", "date_of_birth")
 

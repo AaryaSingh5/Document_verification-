@@ -8,20 +8,17 @@ Designed to run completely in isolation for local development and demos (zero ex
 
 ## 🌟 Key Features
 
-1. **Deterministic Mock OCR Engine (Default)**:
-   - Zero external API calls or credentials needed for local testing and demos.
-   - Deterministic test behavior keyed off upload filenames (`clear_passport.jpg`, `blurry_id.png`, `expired_dl.jpg`).
-2. **Google Cloud Vision OCR Provider (Production Ready)**:
-   - Full implementation stub with lazy loading (`# TODO(real-ocr)` integration points).
-3. **Anti-Spoofing & Anti-Tampering Security**:
-   - `document_number` and `document_type` are strictly immutable post-OCR. Users cannot spoof or modify extracted document identifiers during confirmation.
-   - PII protection: document numbers are masked (`****1234`) before leaving the server.
-   - Raw OCR text dumps are never exposed in external API schemas.
-4. **Secure File Storage**:
+1. **Deterministic Mock & Offline Windows OCR:** Zero-cost local development using a deterministic fallback strategy or the native Windows SDK `Windows.Media.Ocr` engine.
+2. **Multi-Variant OCR Processing:** Uses advanced image preprocessing (Otsu Binarization, Deskew, Contrast Boost) with a fallback loop to extract text accurately even from blurry IDs or those with glare.
+3. **ICAO MRZ Checksum Validation:** Implements strict ICAO Document 9303 Mod-10 checksum validations on passport MRZ lines to ensure data integrity and resist basic spoofing.
+4. **Liveness & Face Verification:** Employs mediapipe facial landmark variance heuristics to check if the user is a live person, and validates similarity against the ID document photo.
+5. **Context-Aware Date Extraction:** Extracts and parses non-standard date formats (e.g. `23-Nov-1994`) intelligently assigning them to DOB/Issue/Expiry bins.
+6. **Privacy First API:** Real document numbers are stored safely server-side for backend validation while only securely masked versions (`*******425`) are returned to frontend interfaces.
+7. **Secure File Storage**:
    - Defends against path traversal attacks (`../../`) via canonical path resolution.
    - Server-generated UUID4 filenames ensure client file names are never trusted.
    - Strict MIME and file extension allow-lists (`.jpg`, `.jpeg`, `.png`, `.pdf`) and 8MB payload limit.
-5. **Multi-Tier Identity Validation Rules**:
+8. **Multi-Tier Identity Validation Rules**:
    - Confidence threshold gates (`>= 0.75` auto-extract, `< 0.50` re-upload required).
    - Mandatory required fields validation (`full_name`, `document_number`, `date_of_birth`).
    - Expiration validation for Passports and Driving Licences (expired documents rejected with clear rationale).

@@ -164,6 +164,27 @@ def test_image_preprocessor_upscaling_and_variants():
     assert enhanced_img.size[0] >= 1200 or enhanced_img.size[1] >= 1200
 
 
+def test_image_preprocessor_deskew_false_positive_prevention():
+    """Test that deskew rejects small 4-corner contours to prevent warping the image."""
+    from PIL import ImageDraw
+    # Create an image (500x500)
+    img = Image.new("RGB", (500, 500), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    # Draw a small 50x50 black rectangle in the center (1% of image area).
+    # This simulates a photo box or QR code that might be mistaken for the document boundary.
+    draw.rectangle([225, 225, 275, 275], fill=(0, 0, 0))
+    
+    # Run deskew directly
+    deskewed = ImagePreprocessor.deskew(img)
+    
+    # Because the detected contour (the 50x50 box) is < 15% of the total area,
+    # the preprocessor should reject it and return the original image untouched,
+    # rather than warping the small 50x50 box to fill the whole frame.
+    assert deskewed.size == (500, 500)
+    # The center should still be black, edge should still be white
+    assert deskewed.getpixel((250, 250)) == (0, 0, 0)
+    assert deskewed.getpixel((10, 10)) == (255, 255, 255)
+
 # =====================================================================
 # 3. DATE EXTRACTION, CONTEXT RANKING & TYPO TOLERANCE TESTS
 # =====================================================================

@@ -11,3 +11,8 @@ pytest-asyncio>=0.23.0
 
 # Optional: Required only when running OCR_MODE=cloud_vision with Google Cloud Vision API
 # google-cloud-vision>=3.7.0
+
+# OpenCV and Mediapipe for image preprocessing, deskewing, and face match / liveness
+opencv-contrib-python>=4.8.0
+mediapipe>=0.10.0
+Pillow>=10.0.0

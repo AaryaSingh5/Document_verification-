@@ -43,6 +43,24 @@ class FieldStatus(str, Enum):
     NOT_FOUND = "NOT_FOUND"
 
 
+class FaceMatchStatus(str, Enum):
+    """Status of the face matching / liveness verification step.
+
+    PROTOTYPE NOTE: Liveness detection uses mediapipe landmark-variation heuristics
+    across 3 frames, not a commercial anti-spoofing SDK. Suitable for demo/prototype;
+    production deployments should integrate a certified liveness provider.
+    """
+
+    PENDING = "PENDING"            # Face match not yet attempted
+    MATCHED = "MATCHED"            # Face in ID matches live capture + liveness passed
+    MISMATCH = "MISMATCH"          # Live face does not match ID photo face
+    NO_FACE_DETECTED = "NO_FACE_DETECTED"   # No face found in ID or live frame
+    LIVENESS_FAILED = "LIVENESS_FAILED"     # Static image / photo-of-photo detected
+    MULTIPLE_FACES = "MULTIPLE_FACES"        # More than one face found; ambiguous
+    SKIPPED = "SKIPPED"            # Face step was not initiated (optional mode)
+
+
+
 class ExtractedField(BaseModel):
     """An individual field extracted via OCR with confidence/review status."""
 
@@ -82,6 +100,26 @@ class ExtractedDocumentData(BaseModel):
     fields_missing: List[str] = Field(
         default_factory=list,
         description="Names of required/expected fields that could not be detected.",
+    )
+    
+    # MRZ Checksum Fields
+    mrz_checksum_valid: Optional[bool] = Field(
+        default=None,
+        description="True if all ICAO MRZ checksums passed, False if any failed. Null if not MRZ.",
+    )
+    mrz_checksum_errors: List[str] = Field(
+        default_factory=list,
+        description="List of specific MRZ checksum validation errors, if any.",
+    )
+
+    # Face Match / Liveness Fields
+    face_match_status: FaceMatchStatus = Field(
+        default=FaceMatchStatus.PENDING,
+        description="Status of face matching against the document photo.",
+    )
+    face_match_score: Optional[float] = Field(
+        default=None,
+        description="Similarity score (0.0 to 1.0) of the face match, if completed.",
     )
 
     model_config = ConfigDict(use_enum_values=True)

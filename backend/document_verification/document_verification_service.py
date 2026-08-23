@@ -31,6 +31,7 @@ from .schemas import (
     DocumentUploadResponse,
     ExtractedDocumentData,
     ExtractedField,
+    FaceMatchStatus,
     FieldStatus,
     VerificationStatus,
     VerificationStatusResponse,
@@ -61,6 +62,7 @@ class VerificationRecord:
     is_mock: bool
     created_at: datetime
     verified_at: Optional[datetime] = None
+    face_match_required: bool = False
 
 
 class DocumentVerificationService:
@@ -294,12 +296,27 @@ class DocumentVerificationService:
                 f"OCR confidence score ({record.confidence:.2f}) is below minimum threshold ({MIN_CONFIDENCE_FOR_REVIEW:.2f})."
             )
 
+        # --- Rule 6: Face Match Verification (If Required) ---
+        if record.face_match_required:
+            fm_status = record.extracted_data.face_match_status
+            if fm_status == FaceMatchStatus.PENDING:
+                reasons.append("Face match step is required but has not been completed.")
+            elif fm_status == FaceMatchStatus.MISMATCH:
+                reasons.append("Live face capture does not match the document photo.")
+            elif fm_status == FaceMatchStatus.LIVENESS_FAILED:
+                reasons.append("Live face capture failed liveness detection.")
+            elif fm_status == FaceMatchStatus.NO_FACE_DETECTED:
+                reasons.append("Could not detect a clear face for matching.")
+            elif fm_status == FaceMatchStatus.MULTIPLE_FACES:
+                reasons.append("Multiple faces detected; please ensure only one person is in frame.")
+        
         # --- Decision Evaluation ---
         if reasons:
             record.status = VerificationStatus.REJECTED
             record.reasons = reasons
             record.verified_at = None
             assigned_tourist_id = None
+            logger.info("Verification %s REJECTED: %s", verification_id, reasons)
         else:
             record.status = VerificationStatus.VERIFIED
             record.verified_at = datetime.now(timezone.utc)
@@ -349,6 +366,10 @@ class DocumentVerificationService:
             created_at=record.created_at,
             verified_at=record.verified_at,
         )
+
+    def _get_record(self, verification_id: UUID) -> Optional["VerificationRecord"]:
+        """Return the VerificationRecord for a session UUID, or None if not found."""
+        return self._store.get(verification_id)
 
     def cleanup_session(self, verification_id: UUID) -> bool:
         """Delete stored file and verification session record.

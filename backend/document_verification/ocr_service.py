@@ -13,7 +13,7 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .config import (
     DOCUMENT_TYPES_WITH_EXPIRY,
@@ -83,6 +83,19 @@ class OCRService(ABC):
 
         # 1. Log Raw OCR for Dev Debugging
         OCRDebugger.log_raw_ocr(text, raw.provider, confidence)
+        logger.debug(
+            "normalize(): provider=%s is_mock=%s confidence=%.3f doc_type=%s raw_text=%r",
+            raw.provider,
+            raw.is_mock,
+            confidence,
+            doc_type_val,
+            text,
+        )
+        if raw.is_mock and "FALLBACK_TO_MOCK" in (raw.provider or ""):
+            logger.warning(
+                "normalize(): This document was processed with SYNTHETIC fallback data, "
+                "not real OCR. Extracted fields will not reflect the actual uploaded image."
+            )
 
         # 2. Extract All Date Candidates across the document
         date_candidates = DateExtractor.extract_candidates_from_text(text, base_confidence=confidence)
@@ -121,10 +134,43 @@ class OCRService(ABC):
             val = re.sub(r"\s+", " ", val)
             return val if len(val) > 0 else None
 
-        # 5. Regex Patterns for Non-Date Fields (Strict horizontal boundaries)
+        # 4.5 Latin-script Line Filter
+        # Filter out lines that contain absolutely no Latin characters or digits (e.g. pure Hindi/Devanagari lines)
+        latin_lines = [l for l in text.splitlines() if re.search(r'[A-Za-z0-9]', l)]
+
+        # 4.6 UI-Chrome Noise Filter
+        # Defends against users uploading a SCREENSHOT of the web app itself (which
+        # contains a thumbnail of the real document plus surrounding app UI text),
+        # rather than a direct photo/scan of the document. If OCR runs on the full
+        # screenshot, app UI strings pollute the text and break field extraction.
+        # This is a mitigation, not a substitute for prompting the user to upload a
+        # real document photo -- it only removes text we can confidently identify as
+        # belonging to our own app chrome, not arbitrary document noise.
+        UI_NOISE_PATTERNS = re.compile(
+            r"suraksha\s*setu|smart\s*tourist\s*identity|safety\s*verification|"
+            r"upload\s*id\b|verify\s*details|safety\s*badge|encrypted\s*ocr|"
+            r"upload\s*identity\s*document|select\s*document\s*type|"
+            r"click\s*to\s*choose|different\s*file|verification\s*notice|"
+            r"document\s*image\s*quality|well[\s-]?lit\s*photograph",
+            re.IGNORECASE,
+        )
+        pre_filter_count = len(latin_lines)
+        latin_lines = [l for l in latin_lines if not UI_NOISE_PATTERNS.search(l)]
+        if len(latin_lines) < pre_filter_count:
+            logger.warning(
+                "normalize(): stripped %d line(s) matching app UI chrome text \u2014 "
+                "this usually means the user uploaded a SCREENSHOT of the web app "
+                "rather than a direct photo of the document. Consider prompting "
+                "the user to re-upload a clean photo for reliable results.",
+                pre_filter_count - len(latin_lines),
+            )
+
+        latin_text = "\n".join(latin_lines)
+
+        # 5. Regex Patterns for Non-Date Fields (Strict horizontal boundaries, using latin_text)
         name_match = re.search(
             r"\b(?:FULL\s*NAME|GIVEN\s*NAME|NAME\s*OF\s*HOLDER|CARD\s*HOLDER|ELECTOR\'?S?\s*NAME|NAME)\b[:\s]+([A-Za-z \.\'\-]{2,40})",
-            text,
+            latin_text,
             re.IGNORECASE,
         )
 
@@ -132,31 +178,63 @@ class OCRService(ABC):
             r"\b(?:PASSPORT\s*(?:NO|NUMBER|#)?|DL\s*(?:NO|NUMBER|#)?|DRIVING\s*LICENCE\s*(?:NO|NUMBER|#)?|"
             r"EPIC\s*(?:NO|NUMBER|#)?|VOTER\s*(?:ID|NO|CARD\s*NO)?|DOC(?:UMENT)?\s*(?:NO|NUMBER|ID)|"
             r"ID\s*(?:NO|NUMBER|#)|IDENTITY\s*(?:NO|NUMBER)|DOCUMENT\s*NUMBER|ID\s*NUMBER)\b[:\s]*([A-Za-z0-9\-\/]{5,25})",
-            text,
+            latin_text,
             re.IGNORECASE,
         )
 
+        aadhaar_match = re.search(r"\b(\d{4}[ \t]?\d{4}[ \t]?\d{4})\b", latin_text)
+
         nationality_match = re.search(
             r"\b(?:NATIONALITY|CITIZENSHIP|COUNTRY)\b[:\s]*([A-Za-z]{3,25})",
-            text,
+            latin_text,
             re.IGNORECASE,
         )
 
         # Merge MRZ / Voter parser / Visual matches
+        aadhaar_name = None
+        if doc_type_val == "OTHER_GOVERNMENT_ID" and not _clean_match(name_match):
+            # Aadhaar name is typically the line just before the DOB line, but real
+            # scans can occasionally insert a stray/blank noise line in between, so
+            # check up to 2 lines above before giving up.
+            for i, line in enumerate(latin_lines):
+                if re.search(
+                    r'\bDOB\b|\bD0B\b|\b00B\b|\bYear of Birth\b|\b\d{2}/\d{2}/\d{4}\b',
+                    line,
+                    re.IGNORECASE,
+                ):
+                    for back in (1, 2):
+                        idx = i - back
+                        if idx < 0:
+                            break
+                        potential_name = re.sub(r'[^A-Za-z\s]', '', latin_lines[idx]).strip()
+                        potential_name = re.sub(r'\s+', ' ', potential_name)
+                        # Prefer a multi-word name (first + last), but accept a
+                        # single garbled token too (e.g. real-world OCR sometimes
+                        # drops/merges words on low-quality photos) as long as it's
+                        # a plausible name-length token, since leaving the field
+                        # empty is worse than a lower-confidence single-token guess
+                        # that the user can correct during the review step.
+                        if 3 <= len(potential_name) <= 40:
+                            aadhaar_name = potential_name
+                            break
+                    break
+
         full_name_val = (
             mrz_data.get("full_name")
             or voter_data.get("full_name")
             or _clean_match(name_match)
+            or aadhaar_name
         )
         doc_num_val = (
             mrz_data.get("document_number")
             or voter_data.get("document_number")
             or _clean_match(doc_num_match)
+            or (aadhaar_match.group(1).replace(" ", "") if aadhaar_match and doc_type_val == "OTHER_GOVERNMENT_ID" else None)
         )
         nat_val = (
             mrz_data.get("nationality")
             or _clean_match(nationality_match)
-            or ("INDIAN" if doc_type_val == "VOTER_ID" else None)
+            or ("INDIAN" if doc_type_val in ("VOTER_ID", "OTHER_GOVERNMENT_ID") else None)
         )
 
         # Dates from MRZ or Context-Aware Classifier
@@ -184,15 +262,25 @@ class OCRService(ABC):
 
             return ExtractedField(value=val, status=status, confidence=field_conf)
 
-        dob_conf = 0.95 if mrz_data.get("date_of_birth") else (best_dob.confidence if best_dob else confidence)
-        exp_conf = 0.95 if mrz_data.get("expiry_date") else (best_expiry.confidence if best_expiry else confidence)
+        # Base regex confidence is slightly discounted (0.90 penalty) to reflect less structure
+        base_regex_conf = confidence * 0.90
+
+        # Refine confidences using MRZ checksum signals if available
+        name_conf = mrz_data.get("full_name_confidence", 0.95) if mrz_data.get("full_name") else base_regex_conf
+        doc_num_conf = mrz_data.get("document_number_confidence", 0.95) if mrz_data.get("document_number") else base_regex_conf
+        nat_conf = 0.95 if mrz_data.get("nationality") else base_regex_conf
+        
+        dob_conf = mrz_data.get("date_of_birth_confidence", 0.95) if mrz_data.get("date_of_birth") else (best_dob.confidence if best_dob else base_regex_conf)
+        exp_conf = mrz_data.get("expiry_date_confidence", 0.95) if mrz_data.get("expiry_date") else (best_expiry.confidence if best_expiry else base_regex_conf)
 
         data = ExtractedDocumentData(
-            full_name=_make_extracted_field(full_name_val, confidence),
-            document_number=_make_extracted_field(doc_num_val, confidence),
-            nationality=_make_extracted_field(nat_val, confidence),
+            full_name=_make_extracted_field(full_name_val, name_conf),
+            document_number=_make_extracted_field(doc_num_val, doc_num_conf),
+            nationality=_make_extracted_field(nat_val, nat_conf),
             date_of_birth=_make_extracted_field(dob_val, dob_conf),
             expiry_date=_make_extracted_field(exp_val, exp_conf),
+            mrz_checksum_valid=mrz_data.get("mrz_checksum_valid"),
+            mrz_checksum_errors=mrz_data.get("mrz_checksum_errors", []),
         )
 
         # Populate fields_found and fields_missing
@@ -387,13 +475,16 @@ class CloudVisionOCRProvider(OCRService):
             )
 
             total_conf = 0.0
-            block_count = 0
+            symbol_count = 0
             if response.full_text_annotation:
                 for page in response.full_text_annotation.pages:
                     for block in page.blocks:
-                        total_conf += getattr(block, "confidence", 0.85)
-                        block_count += 1
-            avg_confidence = (total_conf / block_count) if block_count > 0 else 0.85
+                        for paragraph in block.paragraphs:
+                            for word in paragraph.words:
+                                for symbol in word.symbols:
+                                    total_conf += getattr(symbol, "confidence", 0.85)
+                                    symbol_count += 1
+            avg_confidence = (total_conf / symbol_count) if symbol_count > 0 else 0.85
 
             return RawOCRResult(
                 raw_text=full_text,
@@ -421,53 +512,99 @@ class WindowsNativeOCRProvider(OCRService):
         except ImportError:
             self._available = False
 
+    async def _run_windows_ocr(self, img_bytes: bytes) -> Tuple[str, float]:
+        from winsdk.windows.graphics.imaging import BitmapDecoder  # type: ignore
+        from winsdk.windows.media.ocr import OcrEngine  # type: ignore
+        from winsdk.windows.storage.streams import (  # type: ignore
+            DataWriter,
+            InMemoryRandomAccessStream,
+        )
+
+        stream = InMemoryRandomAccessStream()
+        writer = DataWriter(stream)
+        writer.write_bytes(img_bytes)
+        await writer.store_async()
+        await writer.flush_async()
+        stream.seek(0)
+
+        decoder = await BitmapDecoder.create_async(stream)
+        bitmap = await decoder.get_software_bitmap_async()
+        engine = OcrEngine.try_create_from_user_profile_languages()
+        if not engine:
+            raise RuntimeError("Could not initialize Windows OCR engine from user languages.")
+
+        ocr_res = await engine.recognize_async(bitmap)
+        lines_text = [l.text for l in ocr_res.lines]
+        full_text = "\n".join(lines_text)
+
+        # Calculate confidence score based on recognized structure
+        confidence = 0.92 if len(lines_text) >= 4 else (0.80 if len(lines_text) >= 2 else 0.45)
+        return full_text, confidence
+
     async def extract_document_data(
         self, file_bytes: bytes, filename: str, document_type: DocumentType
     ) -> RawOCRResult:
-        """Run real Windows Native OCR on uploaded document image."""
+        """Run real Windows Native OCR with Multi-Variant Fallback."""
         try:
-            from winsdk.windows.graphics.imaging import BitmapDecoder  # type: ignore
-            from winsdk.windows.media.ocr import OcrEngine  # type: ignore
-            from winsdk.windows.storage.streams import (  # type: ignore
-                DataWriter,
-                InMemoryRandomAccessStream,
-            )
+            try:
+                from .config import MULTI_VARIANT_FALLBACK_THRESHOLD
+            except ImportError:
+                logger.warning(
+                    "MULTI_VARIANT_FALLBACK_THRESHOLD not found in config.py; "
+                    "defaulting to 0.75. Add it to config.py to make this configurable."
+                )
+                MULTI_VARIANT_FALLBACK_THRESHOLD = 0.75
 
-            # Preprocess image for optimal clarity
             variants = ImagePreprocessor.generate_variants(file_bytes)
-            processed_bytes = variants.get(PreprocessingVariant.ENHANCED, file_bytes)
+            
+            # Primary pass
+            primary_bytes = variants.get(PreprocessingVariant.ENHANCED, file_bytes)
+            best_text, best_conf = await self._run_windows_ocr(primary_bytes)
+            best_variant = "ENHANCED"
 
-            stream = InMemoryRandomAccessStream()
-            writer = DataWriter(stream)
-            writer.write_bytes(processed_bytes)
-            await writer.store_async()
-            await writer.flush_async()
-            stream.seek(0)
+            # Fallback pass if primary confidence is low
+            if best_conf < MULTI_VARIANT_FALLBACK_THRESHOLD:
+                logger.info(f"Windows OCR: Primary confidence ({best_conf}) low, attempting fallback variants...")
+                for variant_name in (PreprocessingVariant.BINARIZED, PreprocessingVariant.CONTRAST_BOOSTED, PreprocessingVariant.GRAYSCALE_SHARPENED):
+                    v_bytes = variants.get(variant_name)
+                    if v_bytes:
+                        try:
+                            v_text, v_conf = await self._run_windows_ocr(v_bytes)
+                            if v_conf > best_conf:
+                                best_text, best_conf = v_text, v_conf
+                                best_variant = variant_name
+                            if best_conf >= MULTI_VARIANT_FALLBACK_THRESHOLD:
+                                break
+                        except Exception as var_exc:
+                            logger.warning(f"Windows OCR: Variant {variant_name} failed: {var_exc}")
+                            continue
 
-            decoder = await BitmapDecoder.create_async(stream)
-            bitmap = await decoder.get_software_bitmap_async()
-            engine = OcrEngine.try_create_from_user_profile_languages()
-            if not engine:
-                raise RuntimeError("Could not initialize Windows OCR engine from user languages.")
-
-            ocr_res = await engine.recognize_async(bitmap)
-            lines_text = [l.text for l in ocr_res.lines]
-            full_text = "\n".join(lines_text)
-
-            # Calculate confidence score based on recognized structure
-            confidence = 0.92 if len(lines_text) >= 4 else (0.80 if len(lines_text) >= 2 else 0.45)
-            logger.info("WindowsNativeOCRProvider: recognized %d lines from '%s'", len(lines_text), filename)
+            logger.info("WindowsNativeOCRProvider: processed '%s' using %s variant (confidence=%.2f)", filename, best_variant, best_conf)
 
             return RawOCRResult(
-                raw_text=full_text,
-                confidence=confidence,
+                raw_text=best_text,
+                confidence=best_conf,
                 provider="windows_native_ocr",
                 is_mock=False,
             )
         except Exception as exc:
-            logger.warning("WindowsNativeOCRProvider encountered error (%s). Falling back to MockOCRProvider.", exc)
+            logger.error(
+                "WindowsNativeOCRProvider FAILED for '%s' (%s: %s). "
+                "Falling back to MockOCRProvider \u2014 the data shown will be SYNTHETIC, "
+                "not extracted from the real uploaded image.",
+                filename,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
             mock = MockOCRProvider()
-            return await mock.extract_document_data(file_bytes, filename, document_type)
+            result = await mock.extract_document_data(file_bytes, filename, document_type)
+            # Mark clearly that this result did NOT come from real OCR, even though
+            # the caller requested WindowsNativeOCRProvider. is_mock=True already signals
+            # this to normalize()/downstream logic, but we tag the provider name too
+            # so it's visible in logs/debug output that a fallback occurred.
+            result.provider = "windows_native_ocr_FALLBACK_TO_MOCK"
+            return result
 
 
 def get_ocr_service(

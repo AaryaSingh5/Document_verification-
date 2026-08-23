@@ -24,6 +24,7 @@ from document_verification.config import (
     OCR_MODE,
 )
 from document_verification.router import router as verification_router
+from document_verification.face_match_router import router as face_match_router
 
 # Configure logging
 logging.basicConfig(
@@ -54,6 +55,8 @@ app.add_middleware(
 
 # Mount document verification router
 app.include_router(verification_router, prefix="/api/v1/verifications")
+app.include_router(face_match_router, prefix="/api/v1/verifications")
+
 
 
 @app.get("/health", tags=["Health"])

@@ -21,6 +21,15 @@ export type VerificationStatus =
 
 export type FieldStatus = "FOUND" | "NEEDS_REVIEW" | "NOT_FOUND";
 
+export type FaceMatchStatus =
+  | "PENDING"
+  | "MATCHED"
+  | "MISMATCH"
+  | "NO_FACE_DETECTED"
+  | "LIVENESS_FAILED"
+  | "MULTIPLE_FACES"
+  | "SKIPPED";
+
 export interface ExtractedField {
   value: string | null;
   status: FieldStatus;
@@ -35,6 +44,21 @@ export interface ExtractedDocumentData {
   expiry_date: ExtractedField;
   fields_found: string[];
   fields_missing: string[];
+  mrz_checksum_valid?: boolean | null;
+  mrz_checksum_errors?: string[];
+  face_match_status: FaceMatchStatus;
+  face_match_score?: number | null;
+}
+
+export interface FaceExtractResponse {
+  status: FaceMatchStatus;
+  message: string;
+}
+
+export interface FaceMatchResponse {
+  status: FaceMatchStatus;
+  similarity: number | null;
+  message: string;
 }
 
 export interface DocumentUploadResponse {
@@ -244,5 +268,66 @@ export async function deleteVerification(
     });
   } catch {
     // Best-effort cleanup
+  }
+}
+
+/**
+ * Extract face from already uploaded document image.
+ */
+export async function faceExtract(
+  verificationId: string,
+  baseUrl: string = DEFAULT_BASE_URL
+): Promise<FaceExtractResponse> {
+  const endpoint = `${baseUrl.replace(/\/$/, "")}/${verificationId}/face-extract`;
+
+  try {
+    const response = await fetch(endpoint, { method: "POST" });
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => ({}));
+      throw new VerificationApiError(
+        errorBody.detail || `Face extract failed with status ${response.status}`,
+        response.status,
+        errorBody
+      );
+    }
+    return (await response.json()) as FaceExtractResponse;
+  } catch (error) {
+    if (error instanceof VerificationApiError) throw error;
+    throw new VerificationApiError(`Network error: ${(error as Error).message}`, 0, error);
+  }
+}
+
+/**
+ * Perform liveness check and face match using live frames.
+ */
+export async function faceMatch(
+  verificationId: string,
+  frames: Blob[],
+  baseUrl: string = DEFAULT_BASE_URL
+): Promise<FaceMatchResponse> {
+  const endpoint = `${baseUrl.replace(/\/$/, "")}/${verificationId}/face-match`;
+  const formData = new FormData();
+  
+  frames.forEach((frame, index) => {
+    formData.append("frames", frame, `frame_${index}.jpg`);
+  });
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      body: formData,
+    });
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => ({}));
+      throw new VerificationApiError(
+        errorBody.detail || `Face match failed with status ${response.status}`,
+        response.status,
+        errorBody
+      );
+    }
+    return (await response.json()) as FaceMatchResponse;
+  } catch (error) {
+    if (error instanceof VerificationApiError) throw error;
+    throw new VerificationApiError(`Network error: ${(error as Error).message}`, 0, error);
   }
 }

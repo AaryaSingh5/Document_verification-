@@ -17,6 +17,7 @@ import {
   confirmDocument,
   VerificationApiError,
 } from "../lib/verificationApi";
+import { FaceCapture } from "./FaceCapture";
 
 export interface IdentityVerificationProps {
   /** Optional callback fired when verification completes with final decision */
@@ -60,6 +61,10 @@ export const IdentityVerification: React.FC<IdentityVerificationProps> = ({
   // Final Confirmation Result
   const [decisionResult, setDecisionResult] = useState<DocumentConfirmResponse | null>(null);
 
+  // Face Capture State
+  const [faceExtractDone, setFaceExtractDone] = useState(false);
+  const [faceMatchSuccess, setFaceMatchSuccess] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Handle File Selection
@@ -87,6 +92,8 @@ export const IdentityVerification: React.FC<IdentityVerificationProps> = ({
     setIsLoading(true);
     setLoadingMessage("Encrypting, storing securely, and executing OCR analysis...");
     setErrorMessage(null);
+    setFaceExtractDone(false);
+    setFaceMatchSuccess(false);
 
     try {
       const result = await uploadDocument(
@@ -109,6 +116,15 @@ export const IdentityVerification: React.FC<IdentityVerificationProps> = ({
       if (result.status === "REUPLOAD_REQUIRED") {
         setErrorMessage(result.message);
       } else {
+        // Trigger background face extract
+        import("../lib/verificationApi").then(({ faceExtract }) => {
+          faceExtract(result.verification_id, apiUrl)
+            .then(() => setFaceExtractDone(true))
+            .catch(() => {
+                // If it fails, we still let them proceed but faceMatch step will handle the error
+                setFaceExtractDone(true);
+            });
+        });
         setStep("REVIEW");
       }
     } catch (err) {
@@ -124,6 +140,11 @@ export const IdentityVerification: React.FC<IdentityVerificationProps> = ({
   const handleConfirmSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!uploadResult) return;
+    
+    if (!faceMatchSuccess) {
+        setErrorMessage("Please complete the face verification step before confirming.");
+        return;
+    }
 
     setIsLoading(true);
     setLoadingMessage("Validating identity against Suraksha Setu security rules...");
@@ -506,6 +527,31 @@ export const IdentityVerification: React.FC<IdentityVerificationProps> = ({
               )}
             </div>
 
+            {/* Liveness Face Verification Step */}
+            <div className="pt-4 border-t border-slate-200">
+              <label className="block text-sm font-bold text-slate-700 mb-3">
+                Live Face Verification *
+              </label>
+              {!faceExtractDone ? (
+                <div className="p-4 bg-slate-50 text-center text-sm text-slate-500 rounded-lg animate-pulse">
+                  Extracting face from document...
+                </div>
+              ) : (
+                <FaceCapture 
+                  verificationId={uploadResult.verification_id}
+                  mockMode={uploadResult.mock_mode}
+                  onMatchSuccess={() => {
+                      setFaceMatchSuccess(true);
+                      setErrorMessage(null);
+                  }}
+                  onMatchFailed={(err) => {
+                      setFaceMatchSuccess(false);
+                      setErrorMessage(err);
+                  }}
+                />
+              )}
+            </div>
+
             {/* Action Buttons */}
             <div className="flex gap-3 pt-2">
               <button
@@ -517,7 +563,12 @@ export const IdentityVerification: React.FC<IdentityVerificationProps> = ({
               </button>
               <button
                 type="submit"
-                className="flex-2 py-3 px-6 rounded-xl font-bold text-sm bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-600/20 transition-all active:scale-[0.99]"
+                disabled={!faceMatchSuccess}
+                className={`flex-2 py-3 px-6 rounded-xl font-bold text-sm text-white shadow-md transition-all active:scale-[0.99] ${
+                  faceMatchSuccess 
+                    ? "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20" 
+                    : "bg-slate-400 cursor-not-allowed shadow-none"
+                }`}
               >
                 Confirm & Verify Identity ✓
               </button>

@@ -131,7 +131,7 @@ python -m pytest test_document_verification.py -v
     "fields_found": ["full_name", "document_number", "nationality", "date_of_birth", "expiry_date"],
     "fields_missing": []
   },
-  "mock_mode": true,
+  "mock_mode": false,
   "message": "Document scanned successfully. Please review your details and confirm."
 }
 ```

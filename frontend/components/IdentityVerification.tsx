@@ -539,7 +539,6 @@ export const IdentityVerification: React.FC<IdentityVerificationProps> = ({
               ) : (
                 <FaceCapture 
                   verificationId={uploadResult.verification_id}
-                  mockMode={uploadResult.mock_mode}
                   onMatchSuccess={() => {
                       setFaceMatchSuccess(true);
                       setErrorMessage(null);

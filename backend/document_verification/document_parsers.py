@@ -116,30 +116,42 @@ class PassportParser:
 
             # --- Document number ---
             doc_num_raw = l2[0:9]
-            doc_num_check_expected = int(l2[9]) if l2[9].isdigit() else -1
-            doc_num_check_actual = mrz_check_digit(doc_num_raw)
             doc_num_clean = doc_num_raw.replace("<", "").strip()
 
             if doc_num_clean:
                 result["document_number"] = doc_num_clean
-                if doc_num_check_expected >= 0 and doc_num_check_actual != doc_num_check_expected:
+                if not l2[9].isdigit():
                     checksum_errors.append(
-                        f"document_number: expected check digit {doc_num_check_expected}, "
-                        f"got {doc_num_check_actual} (OCR may have misread '{doc_num_raw}')"
+                        f"document_number: check digit must be a digit, got '{l2[9]}'"
                     )
                     result["document_number_confidence"] = 0.45
                 else:
-                    result["document_number_confidence"] = 0.95
+                    doc_num_check_expected = int(l2[9])
+                    doc_num_check_actual = mrz_check_digit(doc_num_raw)
+                    if doc_num_check_actual != doc_num_check_expected:
+                        checksum_errors.append(
+                            f"document_number: expected check digit {doc_num_check_expected}, "
+                            f"got {doc_num_check_actual} (OCR may have misread '{doc_num_raw}')"
+                        )
+                        result["document_number_confidence"] = 0.45
+                    else:
+                        result["document_number_confidence"] = 0.95
 
             # --- Date of birth ---
             dob_raw = l2[13:19]
-            dob_check_expected = int(l2[19]) if l2[19].isdigit() else -1
-            dob_check_actual = mrz_check_digit(dob_raw)
             dob_iso = parse_mrz_date(dob_raw, is_expiry=False)
-
             if dob_iso:
                 result["date_of_birth"] = dob_iso
-                if dob_check_expected >= 0 and dob_check_actual != dob_check_expected:
+
+            if not l2[19].isdigit():
+                checksum_errors.append(
+                    f"date_of_birth: check digit must be a digit, got '{l2[19]}'"
+                )
+                result["date_of_birth_confidence"] = 0.45
+            else:
+                dob_check_expected = int(l2[19])
+                dob_check_actual = mrz_check_digit(dob_raw)
+                if dob_check_actual != dob_check_expected:
                     checksum_errors.append(
                         f"date_of_birth: expected check digit {dob_check_expected}, "
                         f"got {dob_check_actual} (OCR may have misread '{dob_raw}')"
@@ -150,13 +162,19 @@ class PassportParser:
 
             # --- Expiry date ---
             expiry_raw = l2[21:27]
-            expiry_check_expected = int(l2[27]) if l2[27].isdigit() else -1
-            expiry_check_actual = mrz_check_digit(expiry_raw)
             expiry_iso = parse_mrz_date(expiry_raw, is_expiry=True)
-
             if expiry_iso:
                 result["expiry_date"] = expiry_iso
-                if expiry_check_expected >= 0 and expiry_check_actual != expiry_check_expected:
+
+            if not l2[27].isdigit():
+                checksum_errors.append(
+                    f"expiry_date: check digit must be a digit, got '{l2[27]}'"
+                )
+                result["expiry_date_confidence"] = 0.45
+            else:
+                expiry_check_expected = int(l2[27])
+                expiry_check_actual = mrz_check_digit(expiry_raw)
+                if expiry_check_actual != expiry_check_expected:
                     checksum_errors.append(
                         f"expiry_date: expected check digit {expiry_check_expected}, "
                         f"got {expiry_check_actual} (OCR may have misread '{expiry_raw}')"
@@ -165,15 +183,20 @@ class PassportParser:
                 else:
                     result["expiry_date_confidence"] = 0.95
 
-            # --- Composite check digit (covers doc_num+check + optional[28:42] + dob+check + expiry+check) ---
-            composite_field = l2[0:10] + l2[13:20] + l2[21:28] + l2[28:42]
-            composite_check_expected = int(l2[42]) if len(l2) > 42 and l2[42].isdigit() else -1
-            composite_check_actual = mrz_check_digit(composite_field)
-            if composite_check_expected >= 0 and composite_check_actual != composite_check_expected:
+            # --- Composite check digit (doc_num+check + dob+check + expiry+check+optional_data+optional_check) ---
+            composite_field = l2[0:10] + l2[13:20] + l2[21:43]
+            if not l2[43].isdigit():
                 checksum_errors.append(
-                    f"composite: expected check digit {composite_check_expected}, "
-                    f"got {composite_check_actual} — overall MRZ integrity suspect"
+                    f"composite: check digit must be a digit, got '{l2[43]}'"
                 )
+            else:
+                composite_check_expected = int(l2[43])
+                composite_check_actual = mrz_check_digit(composite_field)
+                if composite_check_actual != composite_check_expected:
+                    checksum_errors.append(
+                        f"composite: expected check digit {composite_check_expected}, "
+                        f"got {composite_check_actual} — overall MRZ integrity suspect"
+                    )
 
             # --- Report checksum results ---
             result["mrz_checksum_valid"] = len(checksum_errors) == 0
@@ -229,74 +252,6 @@ def parse_mrz_date(mrz_yymmdd: str, is_expiry: bool = False) -> Optional[str]:
         return dt.strftime("%Y-%m-%d")
     except ValueError:
         return None
-
-
-class PassportParser:
-    """Specialized parser for Passport documents with MRZ (Machine Readable Zone) decoding."""
-
-    @classmethod
-    def parse_mrz_lines(cls, text: str) -> Dict[str, Any]:
-        """Detect and decode standard 2-line Type-3 Passport MRZ."""
-        result: Dict[str, Any] = {}
-        lines = [line.strip().replace(" ", "") for line in text.splitlines() if len(line.strip()) >= 30]
-
-        # Look for Type-3 MRZ line 1: P<IND... or P<USA...
-        line1 = None
-        line2 = None
-
-        for idx, l in enumerate(lines):
-            # Check for P< or P<Country pattern
-            if l.startswith("P<") or (len(l) >= 40 and re.match(r"^P[A-Z0-9<]", l)):
-                line1 = l
-                if idx + 1 < len(lines) and len(lines[idx + 1]) >= 35:
-                    line2 = lines[idx + 1]
-                break
-
-        if not line1 or not line2:
-            return result
-
-        try:
-            # Line 1: P<AAA SURNAME<<GIVEN<NAMES<<<<<<<<<<<<
-            # Extract names from line 1
-            name_part = line1[5:] if len(line1) > 5 else ""
-            if "<<" in name_part:
-                surname, given = name_part.split("<<", 1)
-                surname = surname.replace("<", " ").strip()
-                given = given.replace("<", " ").strip()
-                full_name = f"{given} {surname}".strip() if given else surname
-            else:
-                full_name = name_part.replace("<", " ").strip()
-
-            if full_name:
-                result["full_name"] = full_name
-
-            # Nationality: characters 2..5 of line 1 (e.g. IND)
-            nat_code = line1[2:5].replace("<", "").strip()
-            if nat_code:
-                result["nationality_code"] = nat_code
-                if nat_code == "IND":
-                    result["nationality"] = "INDIAN"
-
-            # Line 2: DocumentNumber(9) + Check(1) + Nat(3) + DOB(6) + Check(1) + Sex(1) + Expiry(6)
-            doc_num_raw = line2[:9].replace("<", "").strip()
-            if doc_num_raw:
-                result["document_number"] = doc_num_raw
-
-            dob_raw = line2[13:19]
-            dob_iso = parse_mrz_date(dob_raw, is_expiry=False)
-            if dob_iso:
-                result["date_of_birth"] = dob_iso
-
-            expiry_raw = line2[21:27]
-            expiry_iso = parse_mrz_date(expiry_raw, is_expiry=True)
-            if expiry_iso:
-                result["expiry_date"] = expiry_iso
-
-            logger.info("PassportParser: Successfully decoded MRZ -> %s", result)
-        except Exception as exc:
-            logger.debug("MRZ parsing encountered format anomaly: %s", exc)
-
-        return result
 
 
 class DrivingLicenceParser:

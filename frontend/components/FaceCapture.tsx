@@ -6,14 +6,12 @@ interface FaceCaptureProps {
   verificationId: string;
   onMatchSuccess: () => void;
   onMatchFailed: (reason: string) => void;
-  mockMode?: boolean;
 }
 
 export const FaceCapture: React.FC<FaceCaptureProps> = ({
   verificationId,
   onMatchSuccess,
   onMatchFailed,
-  mockMode = false,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -38,15 +36,11 @@ export const FaceCapture: React.FC<FaceCaptureProps> = ({
     }
   }, []);
 
-  // Cleanup camera on unmount
+  // Cleanup camera on stream changes and unmount
   useEffect(() => {
     if (stream && videoRef.current && !videoRef.current.srcObject) {
       videoRef.current.srcObject = stream;
     }
-    return () => {
-      // We don't want to stop the tracks on every render, only on full unmount, 
-      // but the stream state lives as long as the component anyway.
-    };
   }, [stream]);
 
   useEffect(() => {
@@ -74,36 +68,39 @@ export const FaceCapture: React.FC<FaceCaptureProps> = ({
     setIsCapturing(true);
     setErrorMsg(null);
 
-    if (mockMode) {
-      setTimeout(() => {
-        setStatus("MATCHED");
-        onMatchSuccess();
-        setIsCapturing(false);
-      }, 1500);
-      return;
-    }
-
     try {
       const capturedFrames: Blob[] = [];
-      
-      // Capture 3 frames with 1 second delay between each for liveness
-      for (let i = 3; i > 0; i--) {
-        setCountdown(i);
-        await new Promise((r) => setTimeout(r, 1000));
-        const blob = await captureFrame();
-        if (blob) capturedFrames.push(blob);
-      }
+
+      // Capture frame 1
+      const blob1 = await captureFrame();
+      if (blob1) capturedFrames.push(blob1);
+
+      // Wait 1 second
+      setCountdown(1);
+      await new Promise((r) => setTimeout(r, 1000));
       setCountdown(null);
-      
-      if (capturedFrames.length < 3) {
+
+      // Capture frame 2
+      const blob2 = await captureFrame();
+      if (blob2) capturedFrames.push(blob2);
+
+      if (capturedFrames.length < 2) {
         throw new Error("Failed to capture enough frames.");
       }
 
       setStatus("PENDING");
       const res = await faceMatch(verificationId, capturedFrames);
-      
+
       setStatus(res.status);
       if (res.status === "MATCHED") {
+        // Stop camera tracks immediately on success
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+          setStream(null);
+          if (videoRef.current) {
+            videoRef.current.srcObject = null;
+          }
+        }
         onMatchSuccess();
       } else {
         setErrorMsg(res.message);
@@ -112,6 +109,7 @@ export const FaceCapture: React.FC<FaceCaptureProps> = ({
     } catch (error: any) {
       setErrorMsg(error.message || "Failed to process face match");
       setStatus("MISMATCH");
+      onMatchFailed(error.message || "Failed to process face match");
     } finally {
       setIsCapturing(false);
     }
@@ -125,12 +123,11 @@ export const FaceCapture: React.FC<FaceCaptureProps> = ({
           Face Verification
         </h3>
         <p className="text-sm text-gray-500 mt-1">
-          Let's ensure you match your ID photo. 
-          {mockMode && " (Mock Mode active)"}
+          Let's ensure you match your ID photo.
         </p>
       </div>
 
-      {!stream && status === "PENDING" && !mockMode ? (
+      {!stream && status === "PENDING" ? (
         <div className="flex flex-col items-center p-6 bg-indigo-50 rounded-lg">
           <p className="text-indigo-800 text-sm text-center mb-4">
             We need camera access to perform a quick liveness check.
@@ -144,20 +141,13 @@ export const FaceCapture: React.FC<FaceCaptureProps> = ({
         </div>
       ) : (
         <div className="relative rounded-lg overflow-hidden bg-gray-100 aspect-video mb-4 flex items-center justify-center">
-          {mockMode ? (
-            <div className="text-gray-400 flex flex-col items-center">
-              <Camera className="w-12 h-12 mb-2" />
-              <span>Mock Camera Feed</span>
-            </div>
-          ) : (
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full h-full object-cover"
-            />
-          )}
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="w-full h-full object-cover"
+          />
 
           {/* Overlay elements */}
           {countdown !== null && (
@@ -192,7 +182,7 @@ export const FaceCapture: React.FC<FaceCaptureProps> = ({
       {status !== "MATCHED" && (
         <button
           onClick={startLivenessCapture}
-          disabled={(!stream && !mockMode) || isCapturing}
+          disabled={!stream || isCapturing}
           className="w-full py-2.5 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex justify-center items-center gap-2"
         >
           {isCapturing ? "Processing..." : "Start Verification"}

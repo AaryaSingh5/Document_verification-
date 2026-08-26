@@ -296,9 +296,10 @@ class DocumentVerificationService:
                 f"OCR confidence score ({record.confidence:.2f}) is below minimum threshold ({MIN_CONFIDENCE_FOR_REVIEW:.2f})."
             )
 
-        # --- Rule 6: Face Match Verification (If Required) ---
-        if record.face_match_required:
-            fm_status = record.extracted_data.face_match_status
+        # --- Rule 6: Face Match Verification ---
+        # Ensure the system can never set a document/application to VERIFIED unless face_match_status == MATCHED
+        fm_status = record.extracted_data.face_match_status
+        if fm_status != FaceMatchStatus.MATCHED:
             if fm_status == FaceMatchStatus.PENDING:
                 reasons.append("Face match step is required but has not been completed.")
             elif fm_status == FaceMatchStatus.MISMATCH:
@@ -309,6 +310,8 @@ class DocumentVerificationService:
                 reasons.append("Could not detect a clear face for matching.")
             elif fm_status == FaceMatchStatus.MULTIPLE_FACES:
                 reasons.append("Multiple faces detected; please ensure only one person is in frame.")
+            else:
+                reasons.append("Face match verification is incomplete or failed.")
         
         # --- Decision Evaluation ---
         if reasons:

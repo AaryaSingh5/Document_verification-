@@ -393,6 +393,13 @@ def test_api_confirm_success_flow():
     assert up_res.status_code == 200
     verif_id = up_res.json()["verification_id"]
 
+    # Mock face verification to avoid rejection
+    from uuid import UUID
+    from document_verification.schemas import FaceMatchStatus
+    from document_verification.document_verification_service import verification_service
+    record = verification_service._get_record(UUID(verif_id))
+    record.extracted_data.face_match_status = FaceMatchStatus.MATCHED
+
     confirm_payload = {
         "verification_id": verif_id,
         "confirmed_fields": {
@@ -451,6 +458,13 @@ def test_api_anti_spoofing_immutable_fields():
     )
     verif_id = up_res.json()["verification_id"]
 
+    # Mock face verification to avoid rejection
+    from uuid import UUID
+    from document_verification.schemas import FaceMatchStatus
+    from document_verification.document_verification_service import verification_service
+    record = verification_service._get_record(UUID(verif_id))
+    record.extracted_data.face_match_status = FaceMatchStatus.MATCHED
+
     confirm_payload = {
         "verification_id": verif_id,
         "confirmed_fields": {
@@ -480,3 +494,42 @@ def test_api_delete_session():
 
     get_res = client.get(f"/api/v1/verifications/{verif_id}")
     assert get_res.status_code == 404
+
+
+def test_passport_mrz_checksum_valid():
+    """Test a valid passport MRZ where all checksums pass."""
+    mrz_text = (
+        "REPUBLIC OF INDIA / PASSPORT\n"
+        "P<INDSHARMA<<AARAV<RAJESH<<<<<<<<<<<<<<<<<<<\n"
+        "L898902C<3IND6908061M9406236<<<<<<<<<<<<<<02\n"
+    )
+    parsed = PassportParser.parse_mrz_lines(mrz_text)
+    assert parsed.get("mrz_checksum_valid") is True
+    assert len(parsed.get("mrz_checksum_errors", [])) == 0
+    assert parsed.get("document_number") == "L898902C"
+
+
+def test_passport_mrz_checksum_corrupted():
+    """Test a corrupted MRZ check digit where validation fails."""
+    # Let's change the doc number check digit to '9' (which is incorrect)
+    mrz_text = (
+        "REPUBLIC OF INDIA / PASSPORT\n"
+        "P<INDSHARMA<<AARAV<RAJESH<<<<<<<<<<<<<<<<<<<\n"
+        "L898902C<9IND6908061M9406236<<<<<<<<<<<<<<02\n"
+    )
+    parsed = PassportParser.parse_mrz_lines(mrz_text)
+    assert parsed.get("mrz_checksum_valid") is False
+    assert any("document_number" in e for e in parsed.get("mrz_checksum_errors", []))
+
+
+def test_passport_mrz_checksum_non_numeric():
+    """Test non-numeric check digit character treated as validation error."""
+    # Let's change DOB check digit to '<'
+    mrz_text = (
+        "REPUBLIC OF INDIA / PASSPORT\n"
+        "P<INDSHARMA<<AARAV<RAJESH<<<<<<<<<<<<<<<<<<<\n"
+        "L898902C<3IND690806<M9406236<<<<<<<<<<<<<<02\n"
+    )
+    parsed = PassportParser.parse_mrz_lines(mrz_text)
+    assert parsed.get("mrz_checksum_valid") is False
+    assert any("date_of_birth" in e and "must be a digit" in e for e in parsed.get("mrz_checksum_errors", []))

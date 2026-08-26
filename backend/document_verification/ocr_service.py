@@ -590,21 +590,18 @@ class WindowsNativeOCRProvider(OCRService):
         except Exception as exc:
             logger.error(
                 "WindowsNativeOCRProvider FAILED for '%s' (%s: %s). "
-                "Falling back to MockOCRProvider \u2014 the data shown will be SYNTHETIC, "
-                "not extracted from the real uploaded image.",
+                "Returning empty result so verification fails properly.",
                 filename,
                 type(exc).__name__,
                 exc,
                 exc_info=True,
             )
-            mock = MockOCRProvider()
-            result = await mock.extract_document_data(file_bytes, filename, document_type)
-            # Mark clearly that this result did NOT come from real OCR, even though
-            # the caller requested WindowsNativeOCRProvider. is_mock=True already signals
-            # this to normalize()/downstream logic, but we tag the provider name too
-            # so it's visible in logs/debug output that a fallback occurred.
-            result.provider = "windows_native_ocr_FALLBACK_TO_MOCK"
-            return result
+            return RawOCRResult(
+                raw_text="",
+                confidence=0.0,
+                provider="windows_native_ocr_FAILED",
+                is_mock=False,
+            )
 
 
 def get_ocr_service(

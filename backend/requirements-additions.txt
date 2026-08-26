@@ -14,5 +14,5 @@ pytest-asyncio>=0.23.0
 
 # OpenCV and Mediapipe for image preprocessing, deskewing, and face match / liveness
 opencv-contrib-python>=4.8.0
-mediapipe>=0.10.0
+mediapipe==0.10.14
 Pillow>=10.0.0
